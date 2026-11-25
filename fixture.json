@@ -1,0 +1,98 @@
+{
+  "specVersion": "0.7",
+  "reviewId": "7-1",
+  "phase": "draft",
+  "mode": "interactive",
+  "subject": {
+    "repository": "example/tasks",
+    "kind": "pullRequest",
+    "pullRequest": 7,
+    "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "verdict": {
+    "blocking": false,
+    "counts": {
+      "Blocker": 0,
+      "Should fix": 1,
+      "Test improvement": 0,
+      "Follow-up": 0
+    },
+    "risk": "H",
+    "producedBy": {
+      "tool": "reviewkit",
+      "version": "0.2.0"
+    }
+  },
+  "findings": [
+    {
+      "findingId": "11111111-1111-4111-8111-111111111111",
+      "category": "Should fix",
+      "risk": "H",
+      "path": "src/task.ts",
+      "startLine": 12,
+      "endLine": 12,
+      "quote": "save(task)",
+      "rule": "retry-safety",
+      "evidence": {
+        "kind": "claim",
+        "text": "Two retries may save two tasks."
+      },
+      "title": "A retry can save twice",
+      "what": "Save again after a timeout.",
+      "reason": "The reviewer must verify deduplication.",
+      "fix": "Deduplicate requests with a stable key."
+    }
+  ],
+  "provenance": {},
+  "verification": {
+    "checked": 0,
+    "refuted": 0,
+    "notRun": "off"
+  },
+  "level": "standard",
+  "coverage": {
+    "complete": true,
+    "unchecked": [],
+    "skipped": []
+  },
+  "title": "Save tasks",
+  "summary": [
+    "Save tasks with retry handling."
+  ],
+  "changes": [
+    {
+      "change": "Retry saving",
+      "locations": [
+        {
+          "path": "src/task.ts",
+          "startLine": 12,
+          "endLine": 12,
+          "revision": "head"
+        }
+      ],
+      "explainedBy": "Intent: recover from timeouts"
+    }
+  ],
+  "readingGuide": [
+    {
+      "path": "src/task.ts",
+      "kind": "source",
+      "line": 12,
+      "at": "head",
+      "changed": 8,
+      "removed": false,
+      "risk": false,
+      "excluded": false,
+      "group": "Read closely",
+      "evidence": [
+        "Should fix finding"
+      ]
+    }
+  ],
+  "manualChecks": [],
+  "presentation": {
+    "stageNotes": [],
+    "scopeUnknown": false
+  }
+}

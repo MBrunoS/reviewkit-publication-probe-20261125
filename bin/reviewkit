@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ "$1" == review ]]; then
+  # Synthetic Phase A output; publication and rendering use the unmodified reviewed bundle.
+  jq -n --arg head "$REVIEWED_HEAD" --arg report "$root/report.md" --arg review "$root/review.json" '{status:"created",head:$head,run:"1-1",report:$report,review:$review}'
+else
+  exec node --disable-warning=ExperimentalWarning "$root/dist/reviewkit.mjs" "$@"
+fi

@@ -1,0 +1,130 @@
+name: ReviewKit headless review
+description: Run advisory Phase A and upload report.md and review.json
+inputs:
+  pr:
+    description: Pull request number in the checked-out repository
+    required: true
+  head:
+    description: Expected pull request head SHA
+    required: false
+  host:
+    description: Preinstalled and authenticated agent (codex or claude)
+    required: true
+  github-token:
+    description: GitHub token with read access to the repository, pull requests and linked issues
+    default: ${{ github.token }}
+  artifact-name:
+    description: Name of the uploaded review artifact
+  summary:
+    description: Show the report on the workflow run's summary page ('true' or 'false')
+    default: 'true'
+  sarif:
+    description: Upload advisory findings to code scanning (requires security-events write permission)
+    default: 'false'
+  github-check:
+    description: Publish a neutral advisory check (requires checks write permission)
+    default: 'false'
+outputs:
+  status:
+    description: Whether this invocation created a review or found an already reviewed head
+    value: ${{ steps.review.outputs.status }}
+  run:
+    description: ReviewKit run id, if the run still exists
+    value: ${{ steps.review.outputs.run }}
+  head:
+    description: Reviewed commit SHA
+    value: ${{ steps.review.outputs.head }}
+  sarif:
+    description: Generated SARIF file when requested
+    value: ${{ steps.adapters.outputs.sarif }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - id: review
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_ENTERPRISE_TOKEN: ${{ inputs.github-token }}
+        GIT_TERMINAL_PROMPT: '0'
+        GH_PROMPT_DISABLED: '1'
+        GIT_CONFIG_COUNT: '2'
+        GIT_CONFIG_KEY_0: credential.${{ github.server_url }}.helper
+        GIT_CONFIG_VALUE_0: ''
+        GIT_CONFIG_KEY_1: credential.${{ github.server_url }}.helper
+        GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+        REVIEWKIT_ACTION_PATH: ${{ github.action_path }}
+        REVIEWKIT_PR: ${{ inputs.pr }}
+        REVIEWKIT_HEAD: ${{ inputs.head }}
+        REVIEWKIT_HOST: ${{ inputs.host }}
+      run: |
+        args=(review "$REVIEWKIT_PR" --headless --host "$REVIEWKIT_HOST" --json)
+        if [[ -n "$REVIEWKIT_HEAD" ]]; then
+          args+=(--head "$REVIEWKIT_HEAD")
+        fi
+        result=$("$REVIEWKIT_ACTION_PATH/../../../bin/reviewkit" "${args[@]}")
+        {
+          for field in status head; do
+            value=$(jq -er --arg field "$field" '.[$field]' <<< "$result")
+            printf '%s=%s\n' "$field" "$value"
+          done
+          for field in run report review; do
+            value=$(jq -r --arg field "$field" '.[$field] // ""' <<< "$result")
+            printf '%s=%s\n' "$field" "$value"
+          done
+        } >> "$GITHUB_OUTPUT"
+    - name: Show the report on the run page
+      if: steps.review.outputs.review != '' && inputs.summary == 'true'
+      shell: bash
+      env:
+        REVIEWKIT_REVIEW: ${{ steps.review.outputs.review }}
+        REVIEWKIT_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # The Usage line is for the reviewer who pays for the run, as in --post.
+        if [[ -f "$REVIEWKIT_REVIEW" ]]; then
+          {
+            printf '> Advisory AI draft from ReviewKit. It approves nothing and counts as no human review.\n\n'
+            "$REVIEWKIT_ACTION_PATH/../../../bin/reviewkit" render "$REVIEWKIT_REVIEW" | grep -v '^Usage: '
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - name: Prepare advisory adapters
+      id: adapters
+      if: steps.review.outputs.review != '' && (inputs.sarif == 'true' || inputs.github-check == 'true')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_ENTERPRISE_TOKEN: ${{ inputs.github-token }}
+        REVIEWKIT_REVIEW: ${{ steps.review.outputs.review }}
+        REVIEWKIT_ACTION_PATH: ${{ github.action_path }}
+        REVIEWKIT_SARIF: ${{ inputs.sarif }}
+        REVIEWKIT_CHECK: ${{ inputs.github-check }}
+      run: |
+        cli="$REVIEWKIT_ACTION_PATH/../../../bin/reviewkit"
+        if [[ "$REVIEWKIT_SARIF" == 'true' ]]; then
+          sarif="$(dirname "$REVIEWKIT_REVIEW")/review.sarif"
+          "$cli" export "$REVIEWKIT_REVIEW" --sarif --out "$sarif"
+          printf 'sarif=%s\n' "$sarif" >> "$GITHUB_OUTPUT"
+        fi
+        if [[ "$REVIEWKIT_CHECK" == 'true' ]]; then
+          "$cli" export "$REVIEWKIT_REVIEW" --github-check --publish
+        fi
+    - name: Upload advisory SARIF
+      if: steps.adapters.outputs.sarif != ''
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ steps.adapters.outputs.sarif }}
+        category: reviewkit
+        ref: refs/pull/${{ inputs.pr }}/head
+        sha: ${{ steps.review.outputs.head }}
+    - uses: actions/upload-artifact@v4
+      if: steps.review.outputs.report != '' && steps.review.outputs.review != ''
+      with:
+        name: ${{ inputs.artifact-name || format('reviewkit-{0}', inputs.pr) }}
+        path: |
+          ${{ steps.review.outputs.report }}
+          ${{ steps.review.outputs.review }}
+          ${{ steps.adapters.outputs.sarif }}
+        include-hidden-files: true
+        if-no-files-found: error

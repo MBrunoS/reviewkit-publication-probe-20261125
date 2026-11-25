@@ -1,0 +1,82 @@
+name: Verify advisory publication
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        required: true
+        type: string
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+  security-events: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {id: 1, sarif: 'true', check: 'true'}
+          - {id: 2, sarif: 'true', check: 'false'}
+          - {id: 3, sarif: 'false', check: 'true'}
+          - {id: 4, sarif: 'false', check: 'false'}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROBE_PR: ${{ inputs.pr }}
+      PROBE_CASE: ${{ matrix.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare synthetic review for the actual PR head
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PROBE_PR" > pr.json
+          head=$(jq -r .head.sha pr.json)
+          base=$(jq -r .base.sha pr.json)
+          echo "REVIEWED_HEAD=$head" >> "$GITHUB_ENV"
+          export head base
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          let text = fs.readFileSync('fixture.json', 'utf8')
+            .replaceAll('example/tasks', process.env.GITHUB_REPOSITORY)
+            .replaceAll('a'.repeat(40), process.env.head)
+            .replaceAll('b'.repeat(40), process.env.base);
+          const review = JSON.parse(text);
+          review.reviewId = `${process.env.PROBE_PR}-${process.env.PROBE_CASE}`;
+          review.subject.pullRequest = Number(process.env.PROBE_PR);
+          fs.writeFileSync('review.json', JSON.stringify(review));
+          JS
+          bin/reviewkit render review.json > report.md
+          test "$head" != "$GITHUB_SHA"
+      - name: Run reviewed composite action
+        id: review
+        uses: ./.github/actions/headless-review
+        with:
+          pr: ${{ inputs.pr }}
+          head: ${{ env.REVIEWED_HEAD }}
+          host: codex
+          sarif: ${{ matrix.sarif }}
+          github-check: ${{ matrix.check }}
+          artifact-name: publication-${{ matrix.id }}
+      - name: Assert published check and disabled controls
+        env:
+          ENABLE_CHECK: ${{ matrix.check }}
+          ENABLE_SARIF: ${{ matrix.sarif }}
+          SARIF_OUTPUT: ${{ steps.review.outputs.sarif }}
+          ACTION_HEAD: ${{ steps.review.outputs.head }}
+        run: |
+          test "$ACTION_HEAD" = "$REVIEWED_HEAD"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$REVIEWED_HEAD/check-runs" > checks.json
+          expected="reviewkit:$GITHUB_REPOSITORY:$PROBE_PR-$PROBE_CASE"
+          matches=$(jq --arg id "$expected" '[.check_runs[] | select(.external_id == $id)]' checks.json)
+          if [[ "$ENABLE_CHECK" == true ]]; then
+            jq -e --arg sha "$REVIEWED_HEAD" 'length == 1 and .[0].head_sha == $sha and .[0].conclusion == "neutral" and .[0].status == "completed"' <<< "$matches"
+          else
+            jq -e 'length == 0' <<< "$matches"
+          fi
+          if [[ "$ENABLE_SARIF" == true ]]; then
+            test -f "$SARIF_OUTPUT"
+          else
+            test -z "$SARIF_OUTPUT"
+            test ! -f review.sarif
+          fi

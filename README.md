@@ -1,0 +1,1 @@
+Disposable ReviewKit publication probe. Synthetic Phase A data; action.yml and dist/reviewkit.mjs are byte-for-byte from MBrunoS/reviewkit commit 4d1e39b9080a9455db88d9b6916786356c3527b3. No agent is launched. Tests the real composite publication path with workflow permissions and the actual PR head.
