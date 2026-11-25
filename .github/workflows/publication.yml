@@ -68,14 +68,20 @@ jobs:
           ACTION_HEAD: ${{ steps.review.outputs.head }}
         run: |
           test "$ACTION_HEAD" = "$REVIEWED_HEAD"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$REVIEWED_HEAD/check-runs?filter=all" > checks.json
           expected="reviewkit:$GITHUB_REPOSITORY:$PROBE_PR-$PROBE_CASE$GITHUB_RUN_NUMBER"
-          matches=$(jq --arg id "$expected" '[.check_runs[] | select(.external_id == $id)]' checks.json)
-          if [[ "$ENABLE_CHECK" == true ]]; then
-            jq -e --arg sha "$REVIEWED_HEAD" 'length == 1 and .[0].head_sha == $sha and .[0].conclusion == "neutral" and .[0].status == "completed"' <<< "$matches"
-          else
-            jq -e 'length == 0' <<< "$matches"
-          fi
+          # Check-run listings are eventually consistent after creation.
+          assert_checks() {
+            jq -e --arg id "$expected" --arg sha "$REVIEWED_HEAD" --arg enabled "$ENABLE_CHECK" '
+              [.check_runs[] | select(.external_id == $id)] |
+              if $enabled == "true" then
+                length == 1 and .[0].head_sha == $sha and .[0].conclusion == "neutral" and .[0].status == "completed"
+              else length == 0 end' checks.json
+          }
+          for attempt in {1..10}; do
+            if gh api "repos/$GITHUB_REPOSITORY/commits/$REVIEWED_HEAD/check-runs?filter=all&per_page=100" > checks.json && assert_checks; then break; fi
+            sleep 2
+          done
+          assert_checks
           if [[ "$ENABLE_SARIF" == true ]]; then
             test -f "$SARIF_OUTPUT"
           else
