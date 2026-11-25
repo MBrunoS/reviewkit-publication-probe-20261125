@@ -1,8 +1,11 @@
 name: Verify advisory publication
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr:
+        description: Synthetic pull request number
         required: true
         type: string
 permissions:
@@ -24,7 +27,7 @@ jobs:
           - {id: 4, sarif: 'false', check: 'false'}
     env:
       GH_TOKEN: ${{ github.token }}
-      PROBE_PR: ${{ inputs.pr }}
+      PROBE_PR: ${{ inputs.pr || '1' }}
       PROBE_CASE: ${{ matrix.id }}
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +55,7 @@ jobs:
         id: review
         uses: ./.github/actions/headless-review
         with:
-          pr: ${{ inputs.pr }}
+          pr: ${{ inputs.pr || '1' }}
           head: ${{ env.REVIEWED_HEAD }}
           host: codex
           sarif: ${{ matrix.sarif }}
