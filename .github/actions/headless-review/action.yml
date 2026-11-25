@@ -100,12 +100,18 @@ runs:
         REVIEWKIT_ACTION_PATH: ${{ github.action_path }}
         REVIEWKIT_SARIF: ${{ inputs.sarif }}
         REVIEWKIT_CHECK: ${{ inputs.github-check }}
+        REVIEWKIT_HEAD: ${{ steps.review.outputs.head }}
       run: |
         cli="$REVIEWKIT_ACTION_PATH/../../../bin/reviewkit"
         if [[ "$REVIEWKIT_SARIF" == 'true' ]]; then
           sarif="$(dirname "$REVIEWKIT_REVIEW")/review.sarif"
           "$cli" export "$REVIEWKIT_REVIEW" --sarif --out "$sarif"
           printf 'sarif=%s\n' "$sarif" >> "$GITHUB_OUTPUT"
+          # upload-sarif reads Git HEAD before its sha input. Pin its repository
+          # context without checking out or executing any reviewed files.
+          checkout=$(mktemp -d "$RUNNER_TEMP/reviewkit-sarif.XXXXXX")
+          printf 'checkout=%s\n' "$checkout" >> "$GITHUB_OUTPUT"
+          git -c core.hooksPath=/dev/null worktree add --no-checkout --detach "$checkout" "$REVIEWKIT_HEAD"
         fi
         if [[ "$REVIEWKIT_CHECK" == 'true' ]]; then
           "$cli" export "$REVIEWKIT_REVIEW" --github-check --publish
@@ -116,8 +122,16 @@ runs:
       with:
         sarif_file: ${{ steps.adapters.outputs.sarif }}
         category: reviewkit
+        checkout_path: ${{ steps.adapters.outputs.checkout }}
         ref: refs/pull/${{ inputs.pr }}/head
         sha: ${{ steps.review.outputs.head }}
+    - name: Remove SARIF worktree
+      if: always() && steps.adapters.outputs.checkout != ''
+      shell: bash
+      env:
+        REVIEWKIT_SARIF_CHECKOUT: ${{ steps.adapters.outputs.checkout }}
+      run: |
+        git worktree remove --force "$REVIEWKIT_SARIF_CHECKOUT"
     - uses: actions/upload-artifact@v4
       if: steps.review.outputs.report != '' && steps.review.outputs.review != ''
       with:

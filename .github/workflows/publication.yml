@@ -1,7 +1,5 @@
 name: Verify advisory publication
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       pr:
@@ -37,6 +35,7 @@ jobs:
           head=$(jq -r .head.sha pr.json)
           base=$(jq -r .base.sha pr.json)
           echo "REVIEWED_HEAD=$head" >> "$GITHUB_ENV"
+          git fetch --no-tags origin "$head"
           export head base
           node --input-type=module <<'JS'
           import fs from 'node:fs';
@@ -45,7 +44,7 @@ jobs:
             .replaceAll('a'.repeat(40), process.env.head)
             .replaceAll('b'.repeat(40), process.env.base);
           const review = JSON.parse(text);
-          review.reviewId = `${process.env.PROBE_PR}-${process.env.PROBE_CASE}`;
+          review.reviewId = `${process.env.PROBE_PR}-${process.env.PROBE_CASE}${process.env.GITHUB_RUN_NUMBER}`;
           review.subject.pullRequest = Number(process.env.PROBE_PR);
           fs.writeFileSync('review.json', JSON.stringify(review));
           JS
@@ -69,8 +68,8 @@ jobs:
           ACTION_HEAD: ${{ steps.review.outputs.head }}
         run: |
           test "$ACTION_HEAD" = "$REVIEWED_HEAD"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$REVIEWED_HEAD/check-runs" > checks.json
-          expected="reviewkit:$GITHUB_REPOSITORY:$PROBE_PR-$PROBE_CASE"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$REVIEWED_HEAD/check-runs?filter=all" > checks.json
+          expected="reviewkit:$GITHUB_REPOSITORY:$PROBE_PR-$PROBE_CASE$GITHUB_RUN_NUMBER"
           matches=$(jq --arg id "$expected" '[.check_runs[] | select(.external_id == $id)]' checks.json)
           if [[ "$ENABLE_CHECK" == true ]]; then
             jq -e --arg sha "$REVIEWED_HEAD" 'length == 1 and .[0].head_sha == $sha and .[0].conclusion == "neutral" and .[0].status == "completed"' <<< "$matches"
@@ -83,3 +82,9 @@ jobs:
             test -z "$SARIF_OUTPUT"
             test ! -f review.sarif
           fi
+          gh api "repos/$GITHUB_REPOSITORY/code-scanning/analyses?ref=refs/pull/$PROBE_PR/head" > analyses.json
+          jq -e --arg sha "$REVIEWED_HEAD" --arg sarif "$ENABLE_SARIF" --arg check "$ENABLE_CHECK" '
+            [.[] | select(.tool.name == "ReviewKit" and .commit_sha == $sha and
+              (.environment | fromjson | .sarif) == $sarif and
+              (.environment | fromjson | .check) == $check)] |
+            if $sarif == "true" then length > 0 else length == 0 end' analyses.json
